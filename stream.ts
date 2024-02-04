@@ -25,7 +25,7 @@ export class StreamManager {
 
 	stopStreaming = () => {
 		if (Platform.isMobile) {
-			new Notice("[ChatGPT MD] Mobile not supported.")
+			new Notice("[ChatGPT MD] Mobile not supported.");
 			return;
 		}
 		if (this.sse) {
@@ -83,35 +83,96 @@ export class StreamManager {
 
 				source.addEventListener("message", (e: any) => {
 					if (e.data != "[DONE]") {
-						const payload = JSON.parse(e.data);
-						const text = payload.choices[0].delta.content;
+						let payload;
+						try {
+							payload = JSON.parse(e.data);
+						} catch (err) {
+							console.log("Error parsing JSON", err);
+							console.log(e.data);
+							// e.data has corrupted json b/c of some reason, it looks like this:
+							//"{\"id\":\"chatcmpl-8npFjqqyFoGXNa5oGgl3WuzPQB5ka\",\"object\":\"chat.completion.chunk\",\"created\":1706885779,\"model\":\"gpt-4-0613\",\"system_fingerprint\":null,\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"logprobs\":null,\"finish_reason\":null}]}
+							// {\"id\":\"chatcmpl-8npFjqqyFoGXNa5oGgl3WuzPQB5ka\",\"object\":\"chat.completion.chunk\",\"created\":1706885779,\"model\":\"gpt-4-0613\",\"system_fingerprint\":null,\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"logprobs\":null,\"finish_reason\":null}]}"
 
-						// if text undefined, then do nothing
-						if (!text) {
+							// looks like there are }{ json objects that looks the same as the original json object
+							// so we need to split the string by }{ and parse each json object separately
+							const jsonObjects = e.data.split("}{");
+							payload = [
+								JSON.parse(jsonObjects[0] + "}"),
+								JSON.parse("{" + jsonObjects[1]),
+							];
+
+							// return;
+						}
+
+						// if payload undefined, then do nothing
+						if (!payload) {
+							return;
+						}
+						// if array, then parse each object separately
+						if (Array.isArray(payload)) {
+							payload.forEach((p) => {
+								if (p.choices[0].delta.content) {
+									const text = p.choices[0].delta.content;
+
+									// if text undefined, then do nothing
+									if (!text) {
+										return;
+									}
+
+									const cursor = editor.getCursor();
+									const convPos = editor.posToOffset(cursor);
+
+									// @ts-ignore
+									const cm6 = editor.cm;
+									const transaction = cm6.state.update({
+										changes: {
+											from: convPos,
+											to: convPos,
+											insert: text,
+										},
+									});
+									cm6.dispatch(transaction);
+
+									txt += text;
+
+									const newCursor = {
+										line: cursor.line,
+										ch: cursor.ch + text.length,
+									};
+									editor.setCursor(newCursor);
+								}
+							});
 							return;
 						}
 
-						const cursor = editor.getCursor();
-						const convPos = editor.posToOffset(cursor);
+						// const text = payload.choices[0].delta.content;
 
-						// @ts-ignore
-						const cm6 = editor.cm;
-						const transaction = cm6.state.update({
-							changes: {
-								from: convPos,
-								to: convPos,
-								insert: text,
-							},
-						});
-						cm6.dispatch(transaction);
+						// // if text undefined, then do nothing
+						// if (!text) {
+						// 	return;
+						// }
 
-						txt += text;
+						// const cursor = editor.getCursor();
+						// const convPos = editor.posToOffset(cursor);
 
-						const newCursor = {
-							line: cursor.line,
-							ch: cursor.ch + text.length,
-						};
-						editor.setCursor(newCursor);
+						// // @ts-ignore
+						// const cm6 = editor.cm;
+						// const transaction = cm6.state.update({
+						// 	changes: {
+						// 		from: convPos,
+						// 		to: convPos,
+						// 		insert: text,
+						// 	},
+						// });
+						// cm6.dispatch(transaction);
+
+						// txt += text;
+
+						// const newCursor = {
+						// 	line: cursor.line,
+						// 	ch: cursor.ch + text.length,
+						// };
+						// editor.setCursor(newCursor);
 					} else {
 						source.close();
 						console.log("[ChatGPT MD] SSE Closed");
@@ -163,7 +224,6 @@ export class StreamManager {
 						resolve(txt);
 					}
 				});
-
 
 				source.addEventListener("error", (e: any) => {
 					try {
